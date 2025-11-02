@@ -154,7 +154,13 @@ fun LoginScreen() {
                                 val user = checkUserExistence(user = User(username = username, password = password, role = selectedRole))
                                 if (user != null) {
                                     rememberLoggedIn(remember = true, user = user)
-                                    context.router.navigateTo(Screen.AdminHome.route)
+                                    // If the logged-in user is a developer, send them to the public homepage.
+                                    // Keep existing behavior for clients (no change).
+                                    if (user.role == "developer") {
+                                        context.router.navigateTo(Screen.HomePage.route)
+                                    } else {
+                                        context.router.navigateTo(Screen.AdminHome.route)
+                                    }
                                 } else {
                                     errorText = "The user doesn't exist."
                                     delay(3000)
