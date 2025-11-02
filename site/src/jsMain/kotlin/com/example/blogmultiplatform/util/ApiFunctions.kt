@@ -278,6 +278,40 @@ suspend fun createUserAccount(user: User): SignUpResult {
     }
 }
 
+suspend fun fetchProfile(key: String): com.example.blogmultiplatform.models.Profile? {
+    return try {
+        val body = Json.encodeToString(key)
+        val result = window.api.tryPost(apiPath = "getprofile", body = body.encodeToByteArray())?.decodeToString()
+        if (result == null || result == "null") null else result.parseData()
+    } catch (e: Exception) {
+        println("fetchProfile error: ${e.message}")
+        null
+    }
+}
+
+suspend fun ensureProfileExists(username: String) : com.example.blogmultiplatform.models.Profile? {
+    // Try fetch first
+    val existing = fetchProfile(username)
+    if (existing != null) return existing
+    // Create minimal profile object and save via saveprofile API
+    try {
+        val profileUser = com.example.blogmultiplatform.models.User(
+            _id = "",
+            username = username,
+            password = "",
+            role = "client",
+            displayName = "",
+            bio = "",
+            avatarUrl = ""
+        )
+        val saved = window.api.tryPost(apiPath = "saveprofile", body = Json.encodeToString(profileUser).encodeToByteArray())?.decodeToString()
+        return if (saved != null && saved.toBoolean()) fetchProfile(username) else null
+    } catch (e: Exception) {
+        println("ensureProfileExists error: ${e.message}")
+        return null
+    }
+}
+
 inline fun <reified T> String?.parseData(): T {
     return Json.decodeFromString(this.toString())
 }

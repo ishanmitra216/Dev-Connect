@@ -239,4 +239,24 @@ class MongoDB(private val context: InitApiContext) : MongoRepository {
             false
         }
     }
+
+    // Read a profile by username. Returns null if not found.
+    suspend fun getProfileByUsername(username: String): Profile? {
+        return try {
+            profileCollection.find(Filters.eq(Profile::username.name, username)).firstOrNull()
+        } catch (e: Exception) {
+            context.logger.error(e.message.toString())
+            null
+        }
+    }
+
+    // Read a profile by id. Returns null if not found.
+    suspend fun getProfileById(id: String): Profile? {
+        return try {
+            profileCollection.find(Filters.eq(Profile::_id.name, id)).firstOrNull()
+        } catch (e: Exception) {
+            context.logger.error(e.message.toString())
+            null
+        }
+    }
 }

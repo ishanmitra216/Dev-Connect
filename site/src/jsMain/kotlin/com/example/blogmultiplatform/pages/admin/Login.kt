@@ -17,6 +17,7 @@ import com.example.blogmultiplatform.util.Constants.FONT_FAMILY
 import com.example.blogmultiplatform.util.Id
 import com.example.blogmultiplatform.util.Res
 import com.example.blogmultiplatform.util.checkUserExistence
+import com.example.blogmultiplatform.util.ensureProfileExists
 import com.example.blogmultiplatform.util.noBorder
 import com.varabyte.kobweb.compose.css.Cursor
 import com.varabyte.kobweb.compose.css.FontWeight
@@ -154,6 +155,18 @@ fun LoginScreen() {
                                 val user = checkUserExistence(user = User(username = username, password = password, role = selectedRole))
                                 if (user != null) {
                                     rememberLoggedIn(remember = true, user = user)
+                                    // Ensure profile exists for this user and populate profile-related localStorage
+                                    try {
+                                        val profile = ensureProfileExists(user.username)
+                                        if (profile != null) {
+                                            localStorage.setItem("displayName", profile.displayName ?: "")
+                                            localStorage.setItem("bio", profile.bio ?: "")
+                                            localStorage.setItem("avatarUrl", profile.avatarUrl ?: "")
+                                            localStorage.setItem("role", profile.role ?: user.role)
+                                        }
+                                    } catch (_: Throwable) {
+                                        // ignore network/profile errors
+                                    }
                                     // If the logged-in user is a developer, send them to the public homepage.
                                     // Keep existing behavior for clients (no change).
                                     if (user.role == "developer") {
@@ -226,5 +239,15 @@ private fun rememberLoggedIn(
         localStorage["userId"] = user._id
         localStorage["username"] = user.username
         localStorage["role"] = user.role
+        // Also persist profile fields so Profile page displays the logged-in user's profile
+        // UserWithoutPassword may include displayName and avatarUrl; store them (or empty) to avoid showing stale data.
+        try {
+            localStorage.setItem("displayName", user.displayName ?: "")
+            // bio may not be included in UserWithoutPassword; default to empty
+            localStorage.setItem("bio", "")
+            localStorage.setItem("avatarUrl", user.avatarUrl ?: "")
+        } catch (_: Throwable) {
+            // ignore storage errors
+        }
     }
 }

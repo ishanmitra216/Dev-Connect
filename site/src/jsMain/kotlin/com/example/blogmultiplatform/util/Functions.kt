@@ -48,6 +48,11 @@ fun logout() {
     localStorage["remember"] = "false"
     localStorage["userId"] = ""
     localStorage["username"] = ""
+    // Clear profile fields to avoid showing previous user's profile data
+    localStorage["displayName"] = ""
+    localStorage["bio"] = ""
+    localStorage["avatarUrl"] = ""
+    localStorage["role"] = "client"
 }
 
 fun Modifier.noBorder(): Modifier {

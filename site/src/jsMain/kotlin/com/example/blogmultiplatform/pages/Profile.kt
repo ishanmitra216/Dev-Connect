@@ -30,8 +30,11 @@ import com.varabyte.kobweb.browser.api
 import kotlinx.browser.window
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.LaunchedEffect
 import com.varabyte.kobweb.core.rememberPageContext
 import com.example.blogmultiplatform.navigation.Screen
+import com.example.blogmultiplatform.util.fetchProfile
+import com.example.blogmultiplatform.util.ensureProfileExists
 
 @Page("/profile")
 @Composable
@@ -40,14 +43,46 @@ fun ProfilePage() {
     val context = rememberPageContext()
     // Profile fields sourced from localStorage via getItem
     var username by remember { mutableStateOf(localStorage.getItem("username") ?: "") }
-    var displayName by remember { mutableStateOf(localStorage.getItem("displayName") ?: "") }
-    var bio by remember { mutableStateOf(localStorage.getItem("bio") ?: "") }
-    var avatarUrl by remember { mutableStateOf(localStorage.getItem("avatarUrl") ?: "") }
+    var displayName by remember { mutableStateOf("") }
+    var bio by remember { mutableStateOf("") }
+    var avatarUrl by remember { mutableStateOf("") }
     var role by remember { mutableStateOf(localStorage.getItem("role") ?: "client") }
 
     var showSuccess by remember { mutableStateOf(false) }
 
     val scope = MainScope()
+    // On mount, fetch profile from server for the logged-in user (by username or userId)
+    LaunchedEffect(Unit) {
+        try {
+            val uname = localStorage.getItem("username") ?: localStorage.getItem("userId") ?: ""
+            if (uname.isNotBlank()) {
+                // Try to fetch profile, create if missing
+                val prof = fetchProfile(uname) ?: ensureProfileExists(uname)
+                if (prof != null) {
+                    username = prof.username
+                    displayName = prof.displayName ?: ""
+                    bio = prof.bio ?: ""
+                    avatarUrl = prof.avatarUrl ?: ""
+                    role = prof.role ?: role
+                    // Persist to localStorage so header and other tabs update
+                    localStorage.setItem("username", username)
+                    localStorage.setItem("displayName", displayName)
+                    localStorage.setItem("bio", bio)
+                    localStorage.setItem("avatarUrl", avatarUrl)
+                    localStorage.setItem("role", role)
+                } else {
+                    // fallback to localStorage values if server unavailable
+                    displayName = localStorage.getItem("displayName") ?: ""
+                    bio = localStorage.getItem("bio") ?: ""
+                    avatarUrl = localStorage.getItem("avatarUrl") ?: ""
+                }
+            }
+        } catch (_: Throwable) {
+            displayName = localStorage.getItem("displayName") ?: ""
+            bio = localStorage.getItem("bio") ?: ""
+            avatarUrl = localStorage.getItem("avatarUrl") ?: ""
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize().styleModifier {

@@ -32,3 +32,26 @@ suspend fun saveProfile(context: ApiContext) {
         context.res.setBodyText(Json.encodeToString(e.message))
     }
 }
+
+@Api(routeOverride = "getprofile")
+suspend fun getProfile(context: ApiContext) {
+    try {
+        val body = context.req.body?.decodeToString()
+        if (body == null) {
+            context.res.setBodyText(Json.encodeToString(null))
+            return
+        }
+        // body is expected to be a plain string representing username or id
+        val key = Json.decodeFromString<String>(body)
+        val db = context.data.getValue<MongoDB>()
+        val profile = if (key.length < 24) {
+            // probably username
+            db.getProfileByUsername(key)
+        } else {
+            db.getProfileById(key)
+        }
+        context.res.setBodyText(Json.encodeToString(profile))
+    } catch (e: Exception) {
+        context.res.setBodyText(Json.encodeToString(null))
+    }
+}
