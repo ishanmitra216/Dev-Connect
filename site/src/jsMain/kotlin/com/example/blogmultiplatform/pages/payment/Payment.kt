@@ -11,6 +11,7 @@ import com.varabyte.kobweb.compose.ui.styleModifier
 import com.varabyte.kobweb.core.Page
 import com.varabyte.kobweb.silk.components.text.SpanText
 import kotlinx.browser.document
+import com.varabyte.kobweb.browser.api
 import kotlinx.browser.window
 import kotlin.js.Date
 import org.jetbrains.compose.web.attributes.InputType
@@ -20,13 +21,26 @@ import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Text
 import kotlin.random.Random
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 
 @Page("/payment")
 @Composable
 fun PaymentScreen() {
     js("console.log('PaymentScreen mounted')")
 
-    data class PaymentEntry(val amount: Double, val crypto: String, val note: String?, val releasedBy: String, val ts: Long)
+    @Serializable
+    data class PaymentEntry(
+        val _id: String = "",
+        val amount: Double,
+        val crypto: String,
+        val note: String? = null,
+        val releasedBy: String,
+        val ts: Long
+    )
 
     // local client id for ignoring own broadcast messages
     val clientId = remember { Random.nextInt(0, 1_000_000_000).toString() }
@@ -46,30 +60,25 @@ fun PaymentScreen() {
     // UI state
     var payments by remember { mutableStateOf(listOf<PaymentEntry>()) }
     var lastReleased by remember { mutableStateOf<PaymentEntry?>(null) }
-    // Confirmation / success UI state
     var confirmOpen by remember { mutableStateOf(false) }
     var successOpen by remember { mutableStateOf(false) }
     var pendingAmount by remember { mutableStateOf<Double?>(null) }
     var pendingCrypto by remember { mutableStateOf("ETH") }
     var pendingNote by remember { mutableStateOf<String?>(null) }
 
-    // DOM id for history container so we can auto-scroll
     val historyContainerId = "paymentHistoryContainer"
 
-    // Auto-scroll the history container to bottom when payments change
+    // Auto-scroll when payments change
     LaunchedEffect(payments) {
         try {
             val el = document.getElementById(historyContainerId)
             if (el != null) {
-                try {
-                    val ed = el.asDynamic()
-                    ed.scrollTop = ed.scrollHeight
-                } catch (_: Throwable) {}
+                try { el.asDynamic().scrollTop = el.asDynamic().scrollHeight } catch (_: Throwable) {}
             }
         } catch (_: Throwable) {}
     }
 
-    // Listen for payment broadcasts from other tabs
+    // Listen for broadcasts
     DisposableEffect(bcPayment) {
         val handler = fun(ev: dynamic) {
             try {
@@ -78,26 +87,24 @@ fun PaymentScreen() {
                 val type = data.type as? String
                 if (type == "payment_released") {
                     val from = data.from as? String
-                    if (from == clientId) return // ignore our own message
+                    if (from == clientId) return
                     val amount = (data.amount as? Number)?.toDouble() ?: 0.0
                     val note = data.note as? String
                     val ts = (data.time as? Number)?.toLong() ?: Date().getTime().toLong()
                     val crypto = data.crypto as? String ?: "ETH"
-                    val entry = PaymentEntry(amount, crypto, note, from ?: "unknown", ts)
+                    val entry = PaymentEntry(_id = "", amount = amount, crypto = crypto, note = note, releasedBy = from ?: "unknown", ts = ts)
                     payments = payments + entry
                     lastReleased = entry
                 }
-            } catch (e: Throwable) {
-                console.log("bcPayment handler error:", e)
-            }
+            } catch (e: Throwable) { console.log("bcPayment handler error:", e) }
         }
         if (bcPayment != null) bcPayment.onmessage = handler
         onDispose { try { bcPayment?.close() } catch (_: Throwable) {} }
     }
 
-    // Perform the actual release given explicit values (used by confirmed flow)
+    // Release payment (called after user confirms)
     fun performRelease(amount: Double, crypto: String, note: String?) {
-        val entry = PaymentEntry(amount, crypto, note, clientId, Date().getTime().toLong())
+        val entry = PaymentEntry(_id = "", amount = amount, crypto = crypto, note = note, releasedBy = clientId, ts = Date().getTime().toLong())
         payments = payments + entry
         lastReleased = entry
         // broadcast
@@ -111,19 +118,36 @@ fun PaymentScreen() {
                 msg.time = js("Date.now()")
                 msg.crypto = crypto
                 bcPayment.postMessage(msg)
-            } catch (e: dynamic) {
-                console.log("failed to post payment message:", e)
-            }
+            } catch (e: dynamic) { console.log("failed to post payment message:", e) }
         }
-        // clear form DOM inputs
+        // persist: call the savepayment API and log result so failures are visible in console
+        try {
+            MainScope().launch {
+                try {
+                    val resp = window.api.tryPost(apiPath = "savepayment", body = Json.encodeToString(entry).encodeToByteArray())?.decodeToString()
+                    if (resp == null) {
+                        console.log("savepayment: no response from server")
+                    } else {
+                        try {
+                            val saved = Json.decodeFromString<Boolean>(resp)
+                            if (!saved) console.log("savepayment: server returned false")
+                        } catch (e: Throwable) {
+                            console.log("savepayment: failed to parse response:", resp, e)
+                        }
+                    }
+                } catch (e: Throwable) {
+                    console.log("savepayment request failed:", e)
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // clear form fields
         try {
             (document.getElementById("amountInput") as? org.w3c.dom.HTMLInputElement)?.value = ""
             (document.getElementById("noteInput") as? org.w3c.dom.HTMLInputElement)?.value = ""
-            // reset select to default
             (document.getElementById("cryptoSelect") as? org.w3c.dom.HTMLSelectElement)?.value = "ETH"
         } catch (_: Throwable) {}
-        println("Payment released locally: ${'$'}{entry.amount}")
-        // show success toast
+
         successOpen = true
         try { window.setTimeout({ successOpen = false }, 2500) } catch (_: Throwable) {}
     }
@@ -133,8 +157,24 @@ fun PaymentScreen() {
         lastReleased = null
     }
 
+    // Fetch payments on mount
+    LaunchedEffect(Unit) {
+        try {
+            val resp = window.api.tryGet(apiPath = "readpayments?limit=200")?.decodeToString()
+            if (!resp.isNullOrBlank()) {
+                try {
+                    val parsed = Json.decodeFromString<List<PaymentEntry>>(resp)
+                    payments = parsed
+                    if (parsed.isNotEmpty()) lastReleased = parsed.last()
+                } catch (e: Throwable) {
+                    console.log("parse payments error:", e)
+                }
+            }
+        } catch (e: Throwable) { console.log("fetch payments error:", e) }
+    }
+
     // Theme colors
-    val primaryColor = "#6C5CE7" // violet
+    val primaryColor = "#6C5CE7"
     val subtleBg = "#F7F8FB"
 
     // UI
@@ -145,7 +185,7 @@ fun PaymentScreen() {
             .styleModifier { property("background", "linear-gradient(180deg, #f6f8ff 0%, #f7fbf9 100%)") },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Header card
+        // Header
         Box(modifier = Modifier.fillMaxWidth().maxWidth(1100.px).styleModifier { property("padding","18px"); property("border-radius","12px"); property("background","white"); property("box-shadow","0 8px 30px rgba(16,24,40,0.08)") }.padding(bottom = 12.px)) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(24.px).margin(bottom = 6.px), text = "Payments")
@@ -157,17 +197,8 @@ fun PaymentScreen() {
 
         Box(modifier = Modifier.fillMaxWidth().maxWidth(1100.px).styleModifier { property("background", subtleBg); property("border-radius","12px"); property("padding","18px"); property("box-shadow","inset 0 -1px 0 rgba(16,24,40,0.02)") }) {
             Row(modifier = Modifier.fillMaxWidth()) {
-                // Left form
                 Column(modifier = Modifier.width(48.percent).padding(12.px)) {
                     SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(16.px).margin(bottom = 10.px), text = "Release Payment")
-                    // Crypto selector + amount on separate rows
-                    // Crypto selector
-                    Box {
-                        // container for crypto select (injected as innerHTML)
-                        Input(type = InputType.Text, attrs = { attr("hidden", "true") }) // spacer hack for layout
-                    }
-                    // Use a raw select via attrs on a native element (compose doesn't provide a higher-level Select here)
-                    // We'll output a select using innerHTML on a container div for simplicity
                     val selectHtml = "<select id=\"cryptoSelect\" style=\"width:100%;padding:10px;border-radius:10px;border:1px solid #e6e9f2;font-size:14px;\">" +
                             "<option value=\"ETH\">ETH</option>" +
                             "<option value=\"BTC\">BTC</option>" +
@@ -177,14 +208,9 @@ fun PaymentScreen() {
                             "<option value=\"MATIC\">MATIC</option>" +
                             "<option value=\"SOL\">SOL</option>" +
                             "</select>"
-                    // inject select markup inside a container div
                     val selectContainerId = "cryptoSelectContainer"
-                    // ensure container exists and set innerHTML
                     LaunchedEffect(Unit) {
-                        try {
-                            val c = document.getElementById(selectContainerId)
-                            if (c != null) c.innerHTML = selectHtml
-                        } catch (_: Throwable) {}
+                        try { val c = document.getElementById(selectContainerId); if (c != null) c.innerHTML = selectHtml } catch (_: Throwable) {}
                     }
                     Box(modifier = Modifier.id(selectContainerId).fillMaxWidth())
                     Box(modifier = Modifier.height(8.px))
@@ -194,19 +220,20 @@ fun PaymentScreen() {
                     Box(modifier = Modifier.height(14.px))
                     Row(horizontalArrangement = Arrangement.Start) {
                         Button(attrs = { onClick {
-                                // capture pending values and open confirm
-                                try {
-                                    val amountEl = document.getElementById("amountInput") as? org.w3c.dom.HTMLInputElement
-                                    val noteEl = document.getElementById("noteInput") as? org.w3c.dom.HTMLInputElement
-                                    val cryptoEl = document.getElementById("cryptoSelect") as? org.w3c.dom.HTMLSelectElement
-                                    val amount = amountEl?.value?.toDoubleOrNull() ?: 0.0
-                                    if (amount <= 0.0) return@onClick
-                                    pendingAmount = amount
-                                    pendingCrypto = cryptoEl?.value ?: "ETH"
-                                    pendingNote = noteEl?.value?.ifBlank { null }
-                                    confirmOpen = true
-                                } catch (_: Throwable) {}
-                            }; attr("style","background:${primaryColor}; color:white; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600;") }) { Text("Release Payment") }
+                            try {
+                                val amountEl = document.getElementById("amountInput") as? org.w3c.dom.HTMLInputElement
+                                val noteEl = document.getElementById("noteInput") as? org.w3c.dom.HTMLInputElement
+                                val cryptoEl = document.getElementById("cryptoSelect") as? org.w3c.dom.HTMLSelectElement
+                                val amount = amountEl?.value?.toDoubleOrNull() ?: 0.0
+                                if (amount <= 0.0) return@onClick
+                                val crypto = cryptoEl?.value ?: "ETH"
+                                val note = noteEl?.value?.ifBlank { null }
+                                confirmOpen = true
+                                pendingAmount = amount
+                                pendingCrypto = crypto
+                                pendingNote = note
+                            } catch (_: Throwable) {}
+                        }; attr("style","background:${primaryColor}; color:white; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600;") }) { Text("Release Payment") }
                         Box(modifier = Modifier.width(12.px))
                         Button(attrs = { onClick { clearHistory() }; attr("style","background:transparent; color:${primaryColor}; border:1px solid ${primaryColor}; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600;") }) { Text("Clear History") }
                     }
@@ -216,7 +243,6 @@ fun PaymentScreen() {
 
                 Box(modifier = Modifier.width(24.px))
 
-                // Right activity/history
                 Column(modifier = Modifier.width(48.percent).padding(12.px)) {
                     SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(16.px).margin(bottom = 8.px), text = "Activity")
                     Box(modifier = Modifier.fillMaxWidth().height(160.px).styleModifier { property("background","white"); property("border-radius","10px"); property("padding","12px"); property("box-shadow","0 8px 24px rgba(16,24,40,0.04)"); property("overflow-y","auto") }) {
@@ -246,39 +272,39 @@ fun PaymentScreen() {
                 }
             }
         }
-    }
 
-    // Confirmation modal
-    if (confirmOpen) {
-        Box(modifier = Modifier.styleModifier { property("position","fixed"); property("inset","0"); property("display","flex"); property("align-items","center"); property("justify-content","center"); property("background","rgba(2,6,23,0.6)") }) {
-            Box(modifier = Modifier.styleModifier { property("width","420px"); property("background","white"); property("border-radius","12px"); property("padding","18px"); property("box-shadow","0 18px 50px rgba(2,6,23,0.36)") }) {
-                Column {
-                    SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(18.px).margin(bottom = 8.px), text = "Confirm Payment")
-                    val amtText = pendingAmount?.toString() ?: "0"
-                    SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(14.px).margin(bottom = 12.px), text = "You are about to release $amtText ${'$'}{pendingCrypto}. Proceed?")
-                    Row {
-                        Button(attrs = { onClick {
-                                // proceed
+        // Confirmation modal
+        if (confirmOpen) {
+            Box(modifier = Modifier.styleModifier { property("position","fixed"); property("inset","0"); property("display","flex"); property("align-items","center"); property("justify-content","center"); property("background","rgba(2,6,23,0.6)") }) {
+                Box(modifier = Modifier.styleModifier { property("width","420px"); property("background","white"); property("border-radius","12px"); property("padding","18px"); property("box-shadow","0 18px 50px rgba(2,6,23,0.36)") }) {
+                    Column {
+                        SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(18.px).margin(bottom = 8.px), text = "Confirm Payment")
+                        val amtText = pendingAmount?.toString() ?: "0"
+                        SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(14.px).margin(bottom = 12.px), text = "You are about to release $amtText ${'$'}{pendingCrypto}")
+                        SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(14.px).margin(bottom = 12.px), text = "The Amount will be deposited in devconeect.org and it will be on hold until the complication.")
+                        SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(14.px).margin(bottom = 12.px), text = "Proceed?")
+                        Row {
+                            Button(attrs = { onClick {
                                 confirmOpen = false
                                 pendingAmount?.let { performRelease(it, pendingCrypto, pendingNote) }
-                                // reset pending
                                 pendingAmount = null
                                 pendingCrypto = "ETH"
                                 pendingNote = null
                             } }) { Text("Proceed") }
-                        Box(modifier = Modifier.width(12.px))
-                        Button(attrs = { onClick { confirmOpen = false } }) { Text("Cancel") }
+                            Box(modifier = Modifier.width(12.px))
+                            Button(attrs = { onClick { confirmOpen = false } }) { Text("Cancel") }
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Success toast
-    if (successOpen) {
-        Box(modifier = Modifier.styleModifier { property("position","fixed"); property("right","24px"); property("top","24px"); property("z-index","9999") }) {
-            Box(modifier = Modifier.styleModifier { property("background","#10B981"); property("color","white"); property("padding","10px 14px"); property("border-radius","8px"); property("box-shadow","0 8px 30px rgba(16,24,40,0.12)") }) {
-                SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(14.px), text = "Payment successfully done")
+        // Success toast
+        if (successOpen) {
+            Box(modifier = Modifier.styleModifier { property("position","fixed"); property("right","24px"); property("top","24px"); property("z-index","9999") }) {
+                Box(modifier = Modifier.styleModifier { property("background","#10B981"); property("color","white"); property("padding","10px 14px"); property("border-radius","8px"); property("box-shadow","0 8px 30px rgba(16,24,40,0.12)") }) {
+                    SpanText(modifier = Modifier.fontFamily(FONT_FAMILY).fontSize(14.px), text = "Payment successfully done, and in case of any failure reach to our customer support.")
+                }
             }
         }
     }

@@ -57,6 +57,8 @@ kotlin {
 // Resolve the paths at configuration time so task actions don't access `project` during execution (avoids configuration cache problems).
 val kspJsDir = layout.buildDirectory.dir("kspCaches/js/jsMain").get().asFile
 val kspSymbolsFile = layout.buildDirectory.file("kspCaches/js/jsMain/symbols").get().asFile
+val kspJvmDir = layout.buildDirectory.dir("kspCaches/jvm/jvmMain").get().asFile
+val kspJvmSymbolsFile = layout.buildDirectory.file("kspCaches/jvm/jvmMain/symbols").get().asFile
 
 // Create them now at configuration time (preemptively) to avoid race/NotFound issues during KSP tasks
 if (!kspJsDir.exists()) {
@@ -70,6 +72,17 @@ if (kspSymbolsFile.length() == 0L) {
     kspSymbolsFile.writeText("{}")
 }
 
+// Create JVM KSP caches as well
+if (!kspJvmDir.exists()) {
+    kspJvmDir.mkdirs()
+}
+if (!kspJvmSymbolsFile.exists()) {
+    kspJvmSymbolsFile.createNewFile()
+}
+if (kspJvmSymbolsFile.length() == 0L) {
+    kspJvmSymbolsFile.writeText("{}")
+}
+
 tasks.matching { it.name == "kspKotlinJs" || it.name == "kspKotlinJvm" }.configureEach {
     doFirst {
         if (!kspJsDir.exists()) {
@@ -80,6 +93,16 @@ tasks.matching { it.name == "kspKotlinJs" || it.name == "kspKotlinJvm" }.configu
         }
         if (kspSymbolsFile.length() == 0L) {
             kspSymbolsFile.writeText("{}")
+        }
+        // Ensure JVM ksp cache exists before running KSP tasks
+        if (!kspJvmDir.exists()) {
+            kspJvmDir.mkdirs()
+        }
+        if (!kspJvmSymbolsFile.exists()) {
+            kspJvmSymbolsFile.createNewFile()
+        }
+        if (kspJvmSymbolsFile.length() == 0L) {
+            kspJvmSymbolsFile.writeText("{}")
         }
     }
 }

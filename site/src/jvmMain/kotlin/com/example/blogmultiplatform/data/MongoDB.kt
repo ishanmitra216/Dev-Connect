@@ -6,6 +6,7 @@ import com.example.blogmultiplatform.models.Newsletter
 import com.example.blogmultiplatform.models.Post
 import com.example.blogmultiplatform.models.PostWithoutDetails
 import com.example.blogmultiplatform.models.Profile
+import com.example.blogmultiplatform.models.Payment
 import com.example.blogmultiplatform.models.User
 import com.example.blogmultiplatform.util.Constants.DATABASE_NAME
 import com.example.blogmultiplatform.util.Constants.MAIN_POSTS_LIMIT
@@ -19,6 +20,7 @@ import com.varabyte.kobweb.api.init.InitApi
 import com.varabyte.kobweb.api.init.InitApiContext
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.toList
+import org.bson.types.ObjectId
 
 @InitApi
 fun initMongoDB(ctx: InitApiContext) {
@@ -38,11 +40,13 @@ class MongoDB(private val context: InitApiContext) : MongoRepository {
 //    private val client = MongoClient.create(System.getenv("MONGODB_URI"))
     private val client = MongoClient.create(connectionString)
 
+    // Initialize database and collections (database must be created before collection references)
     private val database = client.getDatabase(DATABASE_NAME)
     private val userCollection = database.getCollection<User>("user")
     private val profileCollection = database.getCollection<Profile>("profile")
     private val postCollection = database.getCollection<Post>("post")
     private val newsletterCollection = database.getCollection<Newsletter>("newsletter")
+    private val paymentCollection = database.getCollection<Payment>("payment")
 
     override suspend fun addPost(post: Post): Boolean {
         return postCollection.insertOne(post).wasAcknowledged()
@@ -222,7 +226,7 @@ class MongoDB(private val context: InitApiContext) : MongoRepository {
 
     override suspend fun saveProfile(profile: Profile): Boolean {
         return try {
-            val filter = if (!profile._id.isNullOrBlank()) Filters.eq("_id", profile._id) else Filters.eq("username", profile.username)
+            val filter = if (profile._id.isNotBlank()) Filters.eq("_id", profile._id) else Filters.eq("username", profile.username)
             val updates = mutableListOf(
                 Updates.set("username", profile.username),
                 Updates.set("displayName", profile.displayName),
@@ -239,6 +243,32 @@ class MongoDB(private val context: InitApiContext) : MongoRepository {
             false
         }
     }
+
+    // Save a payment document
+    override suspend fun savePayment(payment: Payment): Boolean {
+        return try {
+            val toInsert = if (payment._id.isBlank()) payment.copy(_id = ObjectId().toHexString()) else payment
+            paymentCollection.insertOne(toInsert).wasAcknowledged()
+        } catch (e: Exception) {
+            context.logger.error(e.message.toString())
+            false
+        }
+    }
+
+    // Read recent payments, sorted by timestamp descending
+    override suspend fun readPayments(limit: Int): List<Payment> {
+        return try {
+            paymentCollection
+                .find()
+                .sort(descending(Payment::ts.name))
+                .limit(limit)
+                .toList()
+        } catch (e: Exception) {
+            context.logger.error(e.message.toString())
+            listOf()
+        }
+    }
+
 
     // Read a profile by username. Returns null if not found.
     suspend fun getProfileByUsername(username: String): Profile? {

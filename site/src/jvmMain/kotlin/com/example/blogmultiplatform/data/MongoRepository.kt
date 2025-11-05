@@ -6,6 +6,7 @@ import com.example.blogmultiplatform.models.Post
 import com.example.blogmultiplatform.models.PostWithoutDetails
 import com.example.blogmultiplatform.models.User
 import com.example.blogmultiplatform.models.Profile
+import com.example.blogmultiplatform.models.Payment
 
 interface MongoRepository {
     suspend fun addPost(post: Post): Boolean
@@ -29,4 +30,8 @@ interface MongoRepository {
 
     // Save or update profile document in 'profile' collection
     suspend fun saveProfile(profile: Profile): Boolean
+
+    // Payment persistence
+    suspend fun savePayment(payment: Payment): Boolean
+    suspend fun readPayments(limit: Int = 100): List<Payment>
 }
