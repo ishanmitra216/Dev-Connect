@@ -1,4 +1,4 @@
-# 📝 Kobweb Blog
+# 📝 DEV CONNECT
 
 A **Full-Stack Technical Blogging Platform** built using the **Kobweb Framework (Kotlin Multiplatform)**.  
 It allows users to create, explore, and manage technical blogs under multiple categories — all with a clean, modern UI and seamless backend integration.    
@@ -54,7 +54,4 @@ It demonstrates how to develop scalable, maintainable web applications using the
 ---
 
 ⭐ **If you like this project, please give it a star!**  
-Your support helps in improving and adding new features 😊
-
-
-fvshujgfiyusgiusdgsdhujgsdfk
+Your support helps in improving and adding new features .
